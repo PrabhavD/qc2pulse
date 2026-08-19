@@ -1,8 +1,10 @@
 # qc2pulse
+
 [![PyPI](https://img.shields.io/pypi/v/qc2pulse.svg)](https://pypi.org/project/qc2pulse/)
 [![Python](https://img.shields.io/pypi/pyversions/qc2pulse.svg)](https://pypi.org/project/qc2pulse/)
 [![Tests](https://github.com/PrabhavD/qc2pulse/actions/workflows/tests.yml/badge.svg)](https://github.com/PrabhavD/qc2pulse/actions/workflows/tests.yml)
 [![License](https://img.shields.io/pypi/l/qc2pulse.svg)](LICENSE)
+
 Compile a digital bit-flip repetition circuit to analog Rydberg pulses (Braket AHS or Pulser).
 
 `qc2pulse` is a narrow protocol compiler, not a general transpiler. It takes an odd-`n`
