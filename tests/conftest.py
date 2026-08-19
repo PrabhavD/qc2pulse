@@ -45,7 +45,9 @@ def backend() -> dict:
         "ramp": 5e-8,
         "min_dt": 5e-8,
         "pulse_gap": 1e-7,
-        "spacing": 4e-6,
+        "spacing": 20e-6,
+        # MockDevice C6 converted from rad/us * um^6 to rad/s * m^6.
+        "interaction_coeff": 5.42015853e-24,
         "pi_logical": math.pi,
         "pi_error": {0: math.pi, 1: math.pi, 2: math.pi},
     }

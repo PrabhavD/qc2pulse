@@ -24,7 +24,7 @@ __all__ = ["RepetitionSpec", "parse_repetition"]
 _STRUCTURAL_GATES = frozenset({"x", "cx", "barrier", "measure"})
 
 #: Gates tolerated and dropped, since they do not change the codeword.
-_IGNORED_GATES = frozenset({"id", "delay", "reset"})
+_IGNORED_GATES = frozenset({"id", "delay"})
 
 ALLOWED_GATES = _STRUCTURAL_GATES | _IGNORED_GATES
 
@@ -73,10 +73,12 @@ def _qubit_indices(circuit: Any, instruction: Any) -> list[int]:
 
 
 def _encoder_data_order(cx_pairs: list[tuple[int, int]]) -> tuple[int, tuple[int, ...]]:
-    """Return ``(root, targets)`` for the encoder, in physical-chain order.
+    """Return ``(root, targets)`` for a sequentially valid encoder.
 
     Works for both a fanout encoder (``0->1``, ``0->2``) and a chain encoder
-    (``0->1``, ``1->2``): in each case exactly one control is never a target.
+    (``0->1``, ``1->2``). Each CX must copy from an already encoded qubit onto a fresh
+    ``|0>`` target; reconvergent edges and out-of-order chains do not prepare a repetition
+    codeword and are rejected.
     """
     controls = [c for c, _ in cx_pairs]
     targets: list[int] = []
@@ -90,7 +92,24 @@ def _encoder_data_order(cx_pairs: list[tuple[int, int]]) -> tuple[int, tuple[int
             f"expected exactly one logical qubit (k = 1) but found {len(roots)} encoder "
             f"roots {roots}; qc2pulse only compiles [[n,1,n]] repetition codes"
         )
-    return roots[0], tuple(targets)
+    root = roots[0]
+    encoded = {root}
+    ordered_targets: list[int] = []
+    for index, (control, target) in enumerate(cx_pairs):
+        if control not in encoded:
+            raise CircuitNotSupportedError(
+                f"encoder CX {index} uses control qubit {control} before that qubit has been "
+                f"encoded; start at root {root} and order a chain from root to leaves"
+            )
+        if target in encoded:
+            raise CircuitNotSupportedError(
+                f"encoder CX {index} targets qubit {target}, which is already encoded; each "
+                "data qubit must be introduced exactly once"
+            )
+        encoded.add(target)
+        ordered_targets.append(target)
+
+    return root, tuple(ordered_targets)
 
 
 def parse_repetition(circuit: Any) -> RepetitionSpec:
@@ -104,7 +123,7 @@ def parse_repetition(circuit: Any) -> RepetitionSpec:
 
     Raises:
         CircuitNotSupportedError: The circuit uses a gate outside
-            ``{x, cx, barrier, measure, id, delay, reset}``, encodes an even ``n`` or
+            ``{x, cx, barrier, measure, id, delay}``, encodes an even ``n`` or
             ``n < 3``, has more than one logical qubit, injects more than one ``X``, or
             injects an ``X`` on an ancilla or after the barrier.
         TypeError: ``circuit`` is neither a ``QuantumCircuit`` nor a string.
@@ -112,9 +131,9 @@ def parse_repetition(circuit: Any) -> RepetitionSpec:
     qc = _as_circuit(circuit)
 
     cx_pairs: list[tuple[int, int]] = []
+    syndrome_cx_pairs: list[tuple[int, int]] = []
     x_before_encoder: list[int] = []
     x_after_encoder: list[int] = []
-    measured: list[int] = []
     encoder_started = False
     past_boundary = False
 
@@ -130,7 +149,6 @@ def parse_repetition(circuit: Any) -> RepetitionSpec:
 
         if name == "measure":
             past_boundary = True
-            measured.extend(_qubit_indices(qc, instruction))
             continue
 
         if name in _IGNORED_GATES:
@@ -151,8 +169,8 @@ def parse_repetition(circuit: Any) -> RepetitionSpec:
             if not past_boundary:
                 encoder_started = True
                 cx_pairs.append((control, target))
-            # Syndrome CX gates are rewritten as destructive data readout, so they are
-            # recorded only implicitly and cost no pulse.
+            else:
+                syndrome_cx_pairs.append((control, target))
             continue
 
         raise CircuitNotSupportedError(
@@ -180,6 +198,18 @@ def parse_repetition(circuit: Any) -> RepetitionSpec:
 
     data_set = set(data)
     ancilla = tuple(i for i in range(qc.num_qubits) if i not in data_set)
+    ancilla_set = set(ancilla)
+
+    # A data-controlled CX onto an ancilla leaves the data register unchanged and can safely be
+    # replaced by destructive data readout. Other post-boundary CX directions mutate data or do
+    # not represent syndrome extraction, so silently dropping them would change the program.
+    for control, target in syndrome_cx_pairs:
+        if control not in data_set or target not in ancilla_set:
+            raise CircuitNotSupportedError(
+                f"post-boundary CX {control}->{target} is not a syndrome extraction gate; "
+                f"expected a data control in {sorted(data_set)} and an ancilla target in "
+                f"{sorted(ancilla_set)}"
+            )
 
     # An X on the root before the encoder is state preparation; an X anywhere else is an
     # injected error. Two X gates on the root cancel, hence the parity.

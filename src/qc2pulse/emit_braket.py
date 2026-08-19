@@ -8,11 +8,14 @@ the whole register instead and accept the warning.
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Mapping
 from typing import Any
 
 from ._errors import EmitterNotSupportedError, MissingExtraError
+from ._physics import DEFAULT_MAX_INTERACTION_RATIO
+from ._physics import max_interaction_ratio as _max_interaction_ratio
 from .compile import read_pulse
 
 __all__ = ["to_braket_ahs"]
@@ -71,17 +74,25 @@ def to_braket_ahs(
     backend: Mapping[str, Any] | None = None,
     *,
     allow_global_fallback: bool = False,
+    allow_interacting: bool = False,
+    max_interaction_ratio: float = DEFAULT_MAX_INTERACTION_RATIO,
 ) -> tuple[Any, float, int]:
     """Emit a Braket ``AnalogHamiltonianSimulation`` from the ``pulse`` block of the IR.
 
     Args:
         pulse: The ``pulse`` block returned by
             :func:`~qc2pulse.compile.digital_repetition_to_analog`.
-        backend: The same analog timings used to compile. Only ``max_rabi`` is consulted, as
-            an optional amplitude ceiling.
+        backend: The same analog timings used to compile. ``max_rabi`` is an optional amplitude
+            ceiling and ``interaction_coeff`` supplies C6 for the independent-atom check.
         allow_global_fallback: Emit a site-selective inject as a global drive instead of
             raising. The register-wide pulse is *not* equivalent to the requested single-site
             pulse, so this warns.
+        allow_interacting: Emit when pair interactions cannot be verified or are too strong for
+            a global pi pulse to act as independent X gates. This is not equivalent to the
+            requested product-codeword preparation and warns.
+        max_interaction_ratio: Largest accepted ``max(C6 / r^6) / Omega`` ratio. Braket has no
+            device argument, so ``backend['interaction_coeff']`` must provide C6 in
+            ``rad/s * m^6`` for an active program.
 
     Returns:
         ``(program, duration_s, n_segments)``.
@@ -89,10 +100,21 @@ def to_braket_ahs(
     Raises:
         MissingExtraError: The ``braket`` extra is not installed.
         EmitterNotSupportedError: The IR is malformed, it contains a site-selective segment
-            and ``allow_global_fallback`` is False, or an amplitude exceeds ``max_rabi``.
+            and ``allow_global_fallback`` is False, its interaction regime is unverified or too
+            strong, an active ramp is zero, or an amplitude exceeds ``max_rabi``.
     """
     ahs_cls, arrangement_cls, driving_field_cls, time_series_cls = _import_braket()
     register_coords, segments, duration = read_pulse(pulse)
+
+    if (
+        isinstance(max_interaction_ratio, bool)
+        or not isinstance(max_interaction_ratio, (int, float))
+        or not math.isfinite(float(max_interaction_ratio))
+        or float(max_interaction_ratio) <= 0.0
+    ):
+        raise EmitterNotSupportedError(
+            f"max_interaction_ratio must be a finite positive number, got {max_interaction_ratio!r}"
+        )
 
     local = [segment for segment in segments if segment.get("site") is not None]
     if local and not allow_global_fallback:
@@ -119,6 +141,56 @@ def to_braket_ahs(
                 f"peak amplitude {peak:.3e} rad/s exceeds backend['max_rabi'] = "
                 f"{float(max_rabi):.3e} rad/s"
             )
+
+    active = [segment for segment in segments if float(segment["amplitude"]) > 0.0]
+    zero_ramp = [segment for segment in active if float(segment["ramp"]) <= 0.0]
+    if zero_ramp:
+        raise EmitterNotSupportedError(
+            "Braket AHS drive amplitudes must start and end at zero, but an active segment has "
+            "ramp=0; compile with a positive ramp"
+        )
+
+    if active:
+        interaction_coeff = None if backend is None else backend.get("interaction_coeff")
+        if interaction_coeff is None:
+            message = (
+                "backend['interaction_coeff'] in rad/s * m^6 is required to verify that the "
+                "global Braket drive is in the independent-atom regime"
+            )
+            if not allow_interacting:
+                raise EmitterNotSupportedError(
+                    f"{message}; pass allow_interacting=True to emit an unverified schedule"
+                )
+            warnings.warn(message, UserWarning, stacklevel=2)
+        else:
+            try:
+                coefficient = float(interaction_coeff)
+            except (TypeError, ValueError) as exc:
+                raise EmitterNotSupportedError(
+                    "backend['interaction_coeff'] must be a finite positive number in "
+                    f"rad/s * m^6, got {interaction_coeff!r}"
+                ) from exc
+            if not math.isfinite(coefficient) or coefficient <= 0.0:
+                raise EmitterNotSupportedError(
+                    "backend['interaction_coeff'] must be a finite positive number in "
+                    f"rad/s * m^6, got {interaction_coeff!r}"
+                )
+
+            peak = max(float(segment["amplitude"]) for segment in active)
+            ratio = _max_interaction_ratio(register_coords, peak, coefficient)
+            if ratio > float(max_interaction_ratio):
+                message = (
+                    f"the strongest Rydberg interaction is {ratio:.3g} times the global Rabi "
+                    f"amplitude, above max_interaction_ratio={float(max_interaction_ratio):.3g}; "
+                    "the global pi pulse will not faithfully prepare the requested product "
+                    "codeword"
+                )
+                if not allow_interacting:
+                    raise EmitterNotSupportedError(
+                        f"{message}. Increase atom spacing or pass allow_interacting=True to "
+                        "emit an exploratory, non-equivalent schedule"
+                    )
+                warnings.warn(message, UserWarning, stacklevel=2)
 
     register = arrangement_cls()
     for x, y in register_coords:

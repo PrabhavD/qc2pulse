@@ -9,10 +9,12 @@ rather than from the IR.
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Mapping
 from typing import Any
 
 from ._errors import EmitterNotSupportedError, MissingExtraError
+from ._physics import DEFAULT_MAX_INTERACTION_RATIO, PULSER_C6_TO_SI, max_interaction_ratio
 from .compile import read_pulse
 
 __all__ = ["to_pulser"]
@@ -64,10 +66,59 @@ def _check_amplitude(channel: Any, amplitude_rad_per_us: float, channel_id: str)
         )
 
 
+def _check_interactions(
+    register_coords: list[list[float]],
+    segments: list[dict[str, Any]],
+    device: Any,
+    *,
+    allow_interacting: bool,
+    ratio_limit: float,
+) -> None:
+    """Fail closed when a global X pulse is outside the independent-atom regime."""
+    global_peak = max(
+        (float(segment["amplitude"]) for segment in segments if segment.get("site") is None),
+        default=0.0,
+    )
+    if global_peak <= 0.0:
+        return
+
+    coefficient = getattr(device, "interaction_coeff", None)
+    if coefficient is None:
+        message = (
+            f"device {getattr(device, 'name', device)!r} does not expose interaction_coeff, "
+            "so qc2pulse cannot verify that the global pi pulse prepares independent atoms"
+        )
+        if not allow_interacting:
+            raise EmitterNotSupportedError(f"{message}; pass allow_interacting=True to opt in")
+        warnings.warn(message, UserWarning, stacklevel=3)
+        return
+
+    ratio = max_interaction_ratio(
+        register_coords, global_peak, float(coefficient) * PULSER_C6_TO_SI
+    )
+    if ratio <= ratio_limit:
+        return
+
+    message = (
+        f"the strongest Rydberg interaction is {ratio:.3g} times the global Rabi amplitude, "
+        f"above max_interaction_ratio={ratio_limit:.3g}; the global pi pulse will not "
+        "faithfully prepare the requested product codeword"
+    )
+    if not allow_interacting:
+        raise EmitterNotSupportedError(
+            f"{message}. Increase atom spacing or pass allow_interacting=True to emit an "
+            "exploratory, non-equivalent schedule"
+        )
+    warnings.warn(message, UserWarning, stacklevel=3)
+
+
 def to_pulser(
     pulse: Mapping[str, Any],
     backend: Mapping[str, Any] | None,
     device: Any,
+    *,
+    allow_interacting: bool = False,
+    max_interaction_ratio: float = DEFAULT_MAX_INTERACTION_RATIO,
 ) -> tuple[Any, float, int]:
     """Emit a Pulser ``Sequence`` from the ``pulse`` block of the IR.
 
@@ -77,6 +128,10 @@ def to_pulser(
         backend: The same analog timings used to compile. Only ``max_rabi`` is consulted, as
             an optional amplitude ceiling.
         device: A Pulser ``Device`` or ``VirtualDevice``.
+        allow_interacting: Emit even when the device's pair interaction is too strong for a
+            global pi pulse to act as independent single-atom X gates. This is not equivalent
+            to the requested repetition-code preparation and warns.
+        max_interaction_ratio: Largest accepted ``max(C6 / r^6) / Omega`` ratio.
 
     Returns:
         ``(sequence, duration_s, n_segments)``, where ``duration_s`` is the sequence duration
@@ -86,10 +141,21 @@ def to_pulser(
         MissingExtraError: The ``pulser`` extra is not installed.
         EmitterNotSupportedError: The IR is malformed, the device has no global
             ground-rydberg channel, a site-selective inject is requested on a device with no
-            local ground-rydberg channel, or an amplitude exceeds the channel or backend limit.
+            local ground-rydberg channel, the pair interaction is too strong, or an amplitude
+            exceeds the channel or backend limit.
     """
     pulse_cls, register_cls, sequence_cls, composite_cls, constant_cls, ramp_cls = _import_pulser()
     register_coords, segments, _ = read_pulse(pulse)
+
+    if (
+        isinstance(max_interaction_ratio, bool)
+        or not isinstance(max_interaction_ratio, (int, float))
+        or not math.isfinite(float(max_interaction_ratio))
+        or float(max_interaction_ratio) <= 0.0
+    ):
+        raise EmitterNotSupportedError(
+            f"max_interaction_ratio must be a finite positive number, got {max_interaction_ratio!r}"
+        )
 
     needs_local = any(segment.get("site") is not None for segment in segments)
 
@@ -119,6 +185,14 @@ def to_pulser(
                 f"peak amplitude {peak:.3e} rad/s exceeds backend['max_rabi'] = "
                 f"{float(max_rabi):.3e} rad/s"
             )
+
+    _check_interactions(
+        register_coords,
+        segments,
+        device,
+        allow_interacting=allow_interacting,
+        ratio_limit=float(max_interaction_ratio),
+    )
 
     register = register_cls(
         {f"q{index}": (x * 1e6, y * 1e6) for index, (x, y) in enumerate(register_coords)}
