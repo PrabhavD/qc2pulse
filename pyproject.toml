@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qc2pulse"
+dynamic = ["version"]
+description = "Compile a digital bit-flip repetition circuit to analog Rydberg pulses (Braket AHS or Pulser)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Prabhav Desai", email = "prabhav.g.desai@gmail.com" }]
+keywords = [
+    "quantum",
+    "quantum-error-correction",
+    "repetition-code",
+    "rydberg",
+    "analog-hamiltonian-simulation",
+    "pulse",
+    "qiskit",
+    "braket",
+    "pulser",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
+dependencies = ["qiskit>=1.0"]
+
+[project.optional-dependencies]
+braket = ["amazon-braket-sdk>=1.80"]
+pulser = ["pulser>=0.19"]
+dev = [
+    "qc2pulse[braket,pulser]",
+    "pytest>=8",
+    "ruff>=0.5",
+    "build>=1.2",
+    "twine>=5",
+]
+
+[project.urls]
+Homepage = "https://github.com/PrabhavD/qc2pulse"
+Issues = "https://github.com/PrabhavD/qc2pulse/issues"
+Changelog = "https://github.com/PrabhavD/qc2pulse/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/qc2pulse/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qc2pulse"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/qc2pulse",
+    "tests",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
