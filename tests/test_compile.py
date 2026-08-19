@@ -116,6 +116,7 @@ def test_ir_records_what_was_parsed(backend):
     assert ir["inject"] == 1
     assert ir["logical_one"] is False
     assert ir["backend"]["rabi"] == pytest.approx(backend["rabi"])
+    assert ir["backend"]["interaction_coeff"] == pytest.approx(backend["interaction_coeff"])
 
 
 def test_n5_compiles_pulses_but_has_no_decode_table(backend):
@@ -169,6 +170,13 @@ def test_non_numeric_backend_value_is_rejected(backend):
     backend["min_dt"] = "50ns"
 
     with pytest.raises(BackendSpecError, match="real number"):
+        digital_repetition_to_analog(bitflip_circuit(3), backend)
+
+
+def test_invalid_optional_interaction_coefficient_is_rejected(backend):
+    backend["interaction_coeff"] = -1.0
+
+    with pytest.raises(BackendSpecError, match="interaction_coeff"):
         digital_repetition_to_analog(bitflip_circuit(3), backend)
 
 

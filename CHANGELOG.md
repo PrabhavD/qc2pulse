@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject malformed repetition encoders, state-changing `reset` instructions, and
+  post-boundary CX gates that are not safe data-to-ancilla syndrome extraction.
+- Guard global Rydberg pi pulses against strong pair interactions, with an explicit warning-only
+  override for exploratory non-equivalent schedules.
+- Reject zero-ramp active Braket segments instead of emitting an envelope that starts and ends
+  above zero.
+
 ## [0.1.0] - 2026-08-19
 
 ### Added

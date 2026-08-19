@@ -29,7 +29,9 @@ backend = {
     "ramp": 5e-8,          # s
     "min_dt": 5e-8,        # s, hardware time grid
     "pulse_gap": 1e-7,     # s, idle between segments
-    "spacing": 4e-6,       # m, atom pitch
+    "spacing": 20e-6,      # m, atom pitch
+    # Target-device C6 in rad/s * m^6; required by the Braket interaction guard.
+    "interaction_coeff": 5.42015853e-24,
     "pi_logical": math.pi,             # global pulse area for |1_L>
     "pi_error": {0: math.pi, 1: math.pi, 2: math.pi},  # per-site inject area
 }
@@ -93,6 +95,11 @@ how a `[[5,1,3]]` circuit gets rejected instead of silently mis-compiled.
   faithfully. `to_braket_ahs` raises by default; pass `allow_global_fallback=True` to emit
   the inject globally and take a warning.
 - Pulser local inject needs a local ground-rydberg channel. Global-only devices raise.
+- A global pi is an independent-atom X only when pair interactions are small compared with the
+  Rabi drive. Both emitters enforce `max(C6 / r^6) / Omega <= 0.01` by default. Pulser reads C6
+  from the device; Braket reads `backend["interaction_coeff"]` in `rad/s * m^6`. Increase the
+  spacing, or pass `allow_interacting=True` only to inspect a non-equivalent exploratory schedule.
+- Braket active segments need a positive ramp so the AHS amplitude starts and ends at zero.
 - An empty pulse program (`|0_L>`, no injected error) still emits a single `min_dt` idle
   segment so AHS and Pulser both receive a legal program.
 - `pi_logical` and `pi_error[site]` are pulse **areas in radians** (nominally pi), not

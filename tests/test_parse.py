@@ -65,6 +65,27 @@ def test_accepts_chain_encoder():
     assert spec.data == (0, 1, 2)
 
 
+def test_rejects_reconvergent_encoder_edge():
+    qc = QuantumCircuit(3)
+    qc.x(0)
+    qc.cx(0, 1)
+    qc.cx(0, 2)
+    qc.cx(1, 2)
+
+    with pytest.raises(CircuitNotSupportedError, match="already encoded"):
+        parse_repetition(qc)
+
+
+def test_rejects_out_of_order_chain_encoder():
+    qc = QuantumCircuit(3)
+    qc.x(0)
+    qc.cx(1, 2)
+    qc.cx(0, 1)
+
+    with pytest.raises(CircuitNotSupportedError, match="before that qubit has been encoded"):
+        parse_repetition(qc)
+
+
 def test_accepts_ancilla_qubits_without_treating_them_as_data():
     qc = QuantumCircuit(5, 3)
     qc.cx(0, 1)
@@ -163,6 +184,40 @@ def test_rejects_x_on_an_ancilla():
     qc.measure(range(3), range(3))
 
     with pytest.raises(CircuitNotSupportedError, match="ancilla"):
+        parse_repetition(qc)
+
+
+def test_rejects_reset_instead_of_silently_dropping_it():
+    qc = QuantumCircuit(3)
+    qc.x(0)
+    qc.reset(0)
+    qc.cx(0, 1)
+    qc.cx(0, 2)
+
+    with pytest.raises(CircuitNotSupportedError, match="unsupported gate 'reset'"):
+        parse_repetition(qc)
+
+
+def test_rejects_post_boundary_cx_that_mutates_data():
+    qc = QuantumCircuit(3)
+    qc.x(0)
+    qc.cx(0, 1)
+    qc.cx(0, 2)
+    qc.barrier()
+    qc.cx(0, 1)
+
+    with pytest.raises(CircuitNotSupportedError, match="not a syndrome extraction gate"):
+        parse_repetition(qc)
+
+
+def test_rejects_post_boundary_ancilla_controlled_cx():
+    qc = QuantumCircuit(4)
+    qc.cx(0, 1)
+    qc.cx(0, 2)
+    qc.barrier()
+    qc.cx(3, 0)
+
+    with pytest.raises(CircuitNotSupportedError, match="not a syndrome extraction gate"):
         parse_repetition(qc)
 
 

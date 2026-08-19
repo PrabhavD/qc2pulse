@@ -39,6 +39,8 @@ REQUIRED_BACKEND_KEYS = (
     "pi_error",
 )
 
+OPTIONAL_BACKEND_KEYS = ("interaction_coeff",)
+
 #: Keys that must be strictly positive; the rest only have to be non-negative.
 _STRICTLY_POSITIVE = frozenset({"rabi", "min_dt", "spacing", "pi_logical"})
 
@@ -121,6 +123,9 @@ def _validate_backend(backend: Any) -> dict[str, Any]:
             continue
         checked[key] = _positive_number(key, backend[key], strict=key in _STRICTLY_POSITIVE)
     checked["pi_error"] = backend["pi_error"]
+    for key in OPTIONAL_BACKEND_KEYS:
+        if key in backend:
+            checked[key] = _positive_number(key, backend[key], strict=True)
     return checked
 
 
@@ -190,6 +195,9 @@ def _backend_echo(backend: Mapping[str, Any], spec: RepetitionSpec) -> dict[str,
             pi_error.append(None)
     echo = {key: float(backend[key]) for key in REQUIRED_BACKEND_KEYS if key != "pi_error"}
     echo["pi_error"] = pi_error
+    for key in OPTIONAL_BACKEND_KEYS:
+        if key in backend:
+            echo[key] = float(backend[key])
     return echo
 
 

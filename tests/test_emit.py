@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from conftest import bitflip_circuit
@@ -103,6 +105,33 @@ class TestBraket:
         with pytest.raises(EmitterNotSupportedError, match="max_rabi"):
             to_braket_ahs(logical_pulse, backend)
 
+    def test_missing_interaction_coefficient_is_refused(self, logical_pulse, backend):
+        del backend["interaction_coeff"]
+
+        with pytest.raises(EmitterNotSupportedError, match="interaction_coeff"):
+            to_braket_ahs(logical_pulse, backend)
+
+    def test_interacting_global_drive_is_refused(self, logical_pulse, backend):
+        backend["interaction_coeff"] *= 100
+
+        with pytest.raises(EmitterNotSupportedError, match="strongest Rydberg interaction"):
+            to_braket_ahs(logical_pulse, backend)
+
+    def test_interacting_global_drive_has_an_explicit_override(self, logical_pulse, backend):
+        backend["interaction_coeff"] *= 100
+
+        with pytest.warns(UserWarning, match="strongest Rydberg interaction"):
+            program, _, _ = to_braket_ahs(logical_pulse, backend, allow_interacting=True)
+
+        assert len(program.register) == 3
+
+    def test_zero_ramp_active_segment_is_refused(self, backend):
+        backend["ramp"] = 0.0
+        pulse = digital_repetition_to_analog(bitflip_circuit(3, logical_one=True), backend)["pulse"]
+
+        with pytest.raises(EmitterNotSupportedError, match="positive ramp"):
+            to_braket_ahs(pulse, backend)
+
     def test_malformed_ir_is_refused(self, backend):
         with pytest.raises(EmitterNotSupportedError, match="missing required key"):
             to_braket_ahs({"register": [[0.0, 0.0]]}, backend)
@@ -201,6 +230,34 @@ class TestPulser:
 
         with pytest.raises(EmitterNotSupportedError, match="max_rabi"):
             to_pulser(logical_pulse, backend, mock_device)
+
+    def test_interacting_global_drive_is_refused(self, backend, mock_device):
+        backend["spacing"] = 4e-6
+        pulse = digital_repetition_to_analog(bitflip_circuit(3, logical_one=True), backend)["pulse"]
+
+        with pytest.raises(EmitterNotSupportedError, match="strongest Rydberg interaction"):
+            to_pulser(pulse, backend, mock_device)
+
+    def test_interacting_global_drive_has_an_explicit_override(self, backend, mock_device):
+        backend["spacing"] = 4e-6
+        pulse = digital_repetition_to_analog(bitflip_circuit(3, logical_one=True), backend)["pulse"]
+
+        with pytest.warns(UserWarning, match="strongest Rydberg interaction"):
+            sequence, _, _ = to_pulser(pulse, backend, mock_device, allow_interacting=True)
+
+        assert sequence.get_duration() > 0
+
+    def test_independent_regime_prepares_the_logical_one_codeword(self, backend, mock_device):
+        simulation = pytest.importorskip("pulser_simulation")
+        pulse = digital_repetition_to_analog(bitflip_circuit(3, logical_one=True), backend)["pulse"]
+        sequence, _, _ = to_pulser(pulse, backend, mock_device)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            emulator = simulation.QutipEmulator.from_sequence(sequence, evaluation_times="Minimal")
+            counts = emulator.run().sample_final_state(N_samples=2_000)
+
+        assert counts["111"] / 2_000 > 0.99
 
     def test_device_without_channels_is_refused(self, logical_pulse, backend):
         with pytest.raises(EmitterNotSupportedError, match="channels"):
